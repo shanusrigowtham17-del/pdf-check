@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Manager</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+
+  <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-md p-6 mt-10">
+    <h2 class="text-2xl font-bold mb-6 text-gray-800">My PDF Documents</h2>
+    
+    <!-- Upload Section -->
+    <div class="mb-8 p-4 border-2 border-dashed border-gray-300 rounded-md text-center">
+      <label class="cursor-pointer block">
+        <span id="upload-status" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition">
+          Choose PDF to Upload
+        </span>
+        <input type="file" id="pdf-input" accept=".pdf" class="hidden" />
+      </label>
+    </div>
+
+    <!-- Files List Container -->
+    <div id="files-list" class="space-y-4">
+      <p class="text-gray-500 text-center">Initializing secure session...</p>
+    </div>
+  </div>
+
+  <script>
+    let supabase = null;
+    let userId = null;
+
+    // 1. Fetch keys securely from Vercel environment before doing anything else
+    async function init() {
+      try {
+        const res = await fetch('/api/config');
+        const config = await res.json();
+        
+        if (!config.supabaseUrl || !config.supabaseAnonKey) {
+          throw new Error("Missing environment variables in Vercel settings.");
+        }
+
+        // Initialize Supabase with the injected keys
+        supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+        
+        // Check user authentication status
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          userId = user.id;
+          fetchUserPDFs();
+        } else {
+          document.getElementById('files-list').innerHTML = 
+            `<p class="text-red-500 text-center">Please log in to manage your documents.</p>`;
+        }
+      } catch (err) {
+        document.getElementById('files-list').innerHTML = 
+          `<p class="text-red-500 text-center">Configuration Error: ${err.message}</p>`;
+      }
+    }
+
+    // 2. SELECT: Fetch and list PDFs
+    async function fetchUserPDFs() {
+      const listContainer = document.getElementById('files-list');
+      
+      const { data, error } = await supabase.storage
+        .from('user files')
+        .list(userId);
+
+      if (error) {
+        listContainer.innerHTML = `<p class="text-red-500">Error loading files: ${error.message}</p>`;
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        listContainer.innerHTML = `<p class="text-gray-500 text-center">No PDFs uploaded yet.</p>`;
+        return;
+      }
+
+      listContainer.innerHTML = ''; 
+      
+      data.forEach(file => {
+        const fileRow = document.createElement('div');
+        fileRow.className = "flex items-center justify-between p-4 border rounded-md hover:bg-gray-50 transition";
+        fileRow.innerHTML = `
+          <div class="flex items-center space-x-3">
+            <span class="text-red-500 font-bold">PDF</span>
+            <span class="text-gray-700 font-medium truncate max-w-xs">${file.name}</span>
+          </div>
+          <div class="flex space-x-3">
+            <button onclick="handleOpen('${file.name}')" class="bg-gray-200 text-gray-700 px-3 py-1.5 rounded hover:bg-gray-300 text-sm">Open</button>
+            <button onclick="handleDelete('${file.name}')" class="bg-red-100 text-red-600 px-3 py-1.5 rounded hover:bg-red-200 text-sm">Delete</button>
+          </div>
+        `;
+        listContainer.appendChild(fileRow);
+      });
+    }
+
+    // 3. UPLOAD: Handle file upload
+    document.getElementById('pdf-input').addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file || !supabase) return;
+
+      if (file.type !== 'application/pdf') {
+        alert('Please upload PDF files only.');
+        return;
+      }
+
+      const statusBtn = document.getElementById('upload-status');
+      statusBtn.innerText = "Uploading...";
+      
+      const filePath = `${userId}/${Date.now()}_${file.name}`;
+
+      const { error } = await supabase.storage
+        .from('user files')
+        .upload(filePath, file);
+
+      statusBtn.innerText = "Choose PDF to Upload";
+
+      if (error) {
+        alert('Upload failed: ' + error.message);
+      } else {
+        alert('PDF uploaded successfully!');
+        fetchUserPDFs();
+      }
+    });
+
+    // 4. OPEN: Open PDF in a new window
+    function handleOpen(fileName) {
+      const { data } = supabase.storage
+        .from('user files')
+        .getPublicUrl(`${userId}/${fileName}`);
+      window.open(data.publicUrl, '_blank');
+    }
+
+    // 5. DELETE: Remove file
+    async function handleDelete(fileName) {
+      if (!confirm('Are you sure you want to delete this PDF?')) return;
+
+      const { error } = await supabase.storage
+        .from('user files')
+        .remove([`${userId}/${fileName}`]);
+
+      if (error) {
+        alert('Delete failed: ' + error.message);
+      } else {
+        alert('PDF deleted.');
+        fetchUserPDFs();
+      }
+    }
+
+    // Run configuration step on initialization
+    init();
+  </script>
+</body>
+</html>
